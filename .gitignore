@@ -1,0 +1,32 @@
+# ---- build outputs (rebuild with build.bat / build_all.bat) ----------------
+*.exe
+*.o
+*.obj
+*.pdb
+
+# ---- test and verification scratch ----------------------------------------
+tests/out/
+bootstrap/out/
+bootstrap/out-pak/
+bootstrap/out-selfhost/
+out_pak/
+.out/
+
+# ---- awib third-party verification (downloaded/rebuilt by verify_awib.ps1) -
+awib/awib-master/
+awib/awib-master.zip
+awib/downloads/
+awib/work/
+awib/awib.b
+awib/awib_gen.c
+
+# ---- python ---------------------------------------------------------------
+__pycache__/
+*.pyc
+
+# ---- editors / OS ---------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
