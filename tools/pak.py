@@ -67,6 +67,7 @@ BYTEBUF_RVA = 0x290208
 READBUF_RVA = 0x290210
 READCNT_RVA = 0x290220
 PATCHSTACK_RVA = 0x287600
+PATCHSTACK_SIZE = 0x8000               # 4096 x 8-byte entries
 SIZE_OF_IMAGE = 0x300000
 
 # record type codes
@@ -224,6 +225,23 @@ def build_stub():
     a.abs64(b"\x48\xB8", IAT_READFILE)
     a.emit(b"\xFF\x10")                             # call [rax]
 
+    # --- the read must contain the whole prefix at least
+    a.emit(b"\x48\x8B\x44\x24\x40")                 # mov rax, [rsp+0x40] (nread)
+    a.emit(b"\x48\x3D" + struct.pack("<I", REC_OFF + 2))   # cmp rax, REC_OFF+2
+    a.rel32(b"\x0F\x82", "fail_file")               # jb fail_file
+
+    # --- file must be <= READ_LIMIT: probe for one more byte (record stream
+    #     beyond the buffer would otherwise be silently truncated)
+    a.emit(b"\x4C\x89\xF9")                         # mov rcx, r15
+    a.abs64(b"\x48\xBA", _va(BYTEBUF_RVA))          # mov rdx, &probe byte
+    a.emit(b"\x41\xB8\x01\x00\x00\x00")             # mov r8d, 1
+    a.emit(b"\x4C\x8D\x4C\x24\x48")                 # lea r9, [rsp+0x48]
+    a.emit(b"\x48\xC7\x44\x24\x20\x00\x00\x00\x00")  # mov qword [rsp+0x20], 0
+    a.abs64(b"\x48\xB8", IAT_READFILE)
+    a.emit(b"\xFF\x10")                             # call [rax]
+    a.emit(b"\x83\x7C\x24\x48\x00")                 # cmp dword [rsp+0x48], 0
+    a.rel32(b"\x0F\x85", "fail_big")                # jne fail_big
+
     # rdi = end of record stream
     a.emit(b"\x48\x8B\x7C\x24\x40")                 # mov rdi, [rsp+0x40] (bytes read)
     a.abs64(b"\x49\xB9", _va(DEST_RVA))             # mov r9, DEST
@@ -246,11 +264,17 @@ def build_stub():
     a.rel32(b"\xE9", "patch_loop")                  # jmp patch_loop
 
     a.label("do_open")
+    a.abs64(b"\x48\xB8", _va(PATCHSTACK_RVA + PATCHSTACK_SIZE))  # mov rax, stack end
+    a.emit(b"\x49\x39\xC3")                         # cmp r11, rax
+    a.rel32(b"\x0F\x83", "fail_deep")               # jae fail_deep (nesting too deep)
     a.emit(b"\x49\x89\x33")                         # mov [r11], rsi
     a.emit(b"\x49\x83\xC3\x08")                     # add r11, 8
     a.rel32(b"\xE9", "advance")
 
     a.label("do_close")
+    a.abs64(b"\x48\xB8", _va(PATCHSTACK_RVA))       # mov rax, stack base
+    a.emit(b"\x49\x39\xC3")                         # cmp r11, rax
+    a.rel32(b"\x0F\x86", "fail_close")              # jbe fail_close (unmatched ']')
     a.emit(b"\x49\x83\xEB\x08")                     # sub r11, 8
     a.emit(b"\x4D\x8B\x13")                         # mov r10, [r11]
     a.emit(b"\x0F\xB6\x06")                         # movzx eax, byte [rsi]
@@ -267,6 +291,9 @@ def build_stub():
 
     # ---- get std handles and enter the stream
     a.label("patch_done")
+    a.abs64(b"\x48\xB8", _va(PATCHSTACK_RVA))       # mov rax, stack base
+    a.emit(b"\x49\x39\xC3")                         # cmp r11, rax
+    a.rel32(b"\x0F\x85", "fail_open")               # jne fail_open (unmatched '[')
     a.emit(b"\xB9\xF5\xFF\xFF\xFF")                 # mov ecx, -11 (stdout)
     a.abs64(b"\x48\xB8", IAT_GSTDHANDLE)
     a.emit(b"\xFF\x10")                             # call [rax]
@@ -283,10 +310,25 @@ def build_stub():
     a.abs64(b"\x48\xB8", _va(DEST_RVA + REC_OFF + 2))
     a.emit(b"\xFF\xE0")                             # jmp rax
 
-    a.label("fail")
-    a.emit(b"\xB9\x01\x00\x00\x00")                 # mov ecx, 1
-    a.abs64(b"\x48\xB8", IAT_EXIT)
-    a.emit(b"\xFF\x10")                             # call [rax]
+    def _fail_error(label, code):
+        a.label(label)
+        a.emit(b"\xB9" + struct.pack("<I", code))   # mov ecx, <code>
+        a.abs64(b"\x48\xB8", IAT_EXIT)
+        a.emit(b"\xFF\x10")                         # call [rax]
+
+    # Exit codes of a PAK executable that cannot run its payload:
+    #   1 = cannot open/read own file
+    #   2 = record stream larger than the 2 MiB read buffer (would be truncated)
+    #   3 = loop nesting deeper than 4096
+    #   4 = unmatched ']'
+    #   5 = unmatched '['
+    #   6 = file shorter than the record-stream offset (no payload)
+    _fail_error("fail", 1)
+    _fail_error("fail_big", 2)
+    _fail_error("fail_deep", 3)
+    _fail_error("fail_close", 4)
+    _fail_error("fail_open", 5)
+    _fail_error("fail_file", 6)
     return a.finish()
 
 

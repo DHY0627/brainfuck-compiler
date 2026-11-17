@@ -42,9 +42,10 @@ def build(name, source):
     return exe, path
 
 
-def run(path, stdin_bytes):
+def run(path, stdin_bytes, timeout=30):
     p = subprocess.run([path], input=stdin_bytes,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       timeout=timeout)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -98,6 +99,24 @@ def main():
         f.write(exe)
     rc, out, err = run(path, b"")
     check(rc == 0 and out == b"" and err == b"", "empty program")
+
+    # --- payloads the launcher must reject instead of running garbage -------
+    # The stub validates the record stream before entering it, so a broken or
+    # oversized payload exits with a specific code instead of hanging.
+    def rejects(name, source, want_code):
+        exe = pak.compile_source(source)
+        path = os.path.join(OUT, name + ".pak.exe")
+        with open(path, "wb") as f:
+            f.write(exe)
+        rc, out, err = run(path, b"", timeout=20)
+        check(rc == want_code, "%s: exit code %d != %d" % (name, rc, want_code))
+        check(out == b"", "%s: no output before failing" % name)
+        print("ok %-14s exit=%d (rejected)" % (name, rc))
+
+    rejects("unmatched_close", b"+++]", 4)
+    rejects("unmatched_open", b"+++[", 5)
+    rejects("too_deep", b"[" * 5000 + b"]" * 5000, 3)
+    rejects("too_big", b"+" * 400000, 2)
 
     print("\n%d checks, %d failed" % (checks, failed))
     return 1 if failed else 0

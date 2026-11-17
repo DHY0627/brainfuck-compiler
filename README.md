@@ -165,7 +165,7 @@ tests\run_tests.py                       144 checks, 0 failed
 bootstrap\run_bootstrap_tests.py          57 checks, 0 failed
 bootstrap\selfhost.py                     19 checks, 0 failed
 tools\verify_bfc2.py                      11 checks, 0 failed
-tools\test_pak.py                         26 checks, 0 failed
+tools\test_pak.py                         34 checks, 0 failed
 tools\test_pak_large.py                    6 checks, 0 failed
 bootstrap\selfhost_pak.py                 29 checks, 0 failed
 awib\verify_awib.ps1                      16 checks, 0 failed
@@ -190,7 +190,7 @@ inner increments: 100000000,  wall: 0.679 s  (147.4 Mops/s)
 | `bfsrc/t2bf.bf` | 352 B | 自由文本 | 能打印该文本的 BF 程序 | `bfc.exe` |
 | `bfsrc/bfc0.bf` | **30 KB** | **Brainfuck** | **完整可运行的 PE32+ .exe** | `bfc.exe` |
 | `bfsrc/bfc1.bf` | **28 KB** | **Brainfuck** | **C 源码（再由 gcc 出原生 exe）** | `bfc.exe` → 自己 → 自己 |
-| `bfsrc/bfc2.bf` | **66 KB** | **Brainfuck** | **完整可运行的 PE32+ .exe（纯 BF 写出，不用 gcc）** | `bfc.exe` → 自己 → 自己 |
+| `bfsrc/bfc2.bf` | **78 KB** | **Brainfuck** | **完整可运行的 PE32+ .exe（纯 BF 写出，不用 gcc）** | `bfc.exe` → 自己 → 自己 |
 
 `bfc0.bf` 是正题：它从 stdin 读一段 Brainfuck 程序，向 stdout 写一个**完整、
 可直接运行的 Windows 控制台 exe**——不需要任何后续处理。
@@ -372,23 +372,24 @@ bfsrc\bfc2.exe < prog.bf > prog.exe               :: prog.exe 可直接双击运
   多出来的部分填零，所以镜像结构完全确定、与源程序大小无关；
 * 每条 BF 指令编译成一条**定长记录** `[长度][类型][payload][EB 02]`，
   `[` / `]` 的跳转位移先写 0；
-* 头部里 412 字节的**自读存根**在进程启动时用 `GetModuleFileNameA` +
-  `ReadFile` 把自己的文件读进内存，线性扫描记录把跳转位移补成正确值，
-  然后跳到第一条记录。
+* 头部里 627 字节的**自读存根**在进程启动时用 `GetModuleFileNameA` +
+  `ReadFile` 把自己的文件读进内存，先校验载荷（大小 / 括号配平 / 嵌套深度），
+  再线性扫描记录把跳转位移补成正确值，然后跳到第一条记录；载荷坏掉时带
+  退出码 1–6 拒绝执行，不会跑到垃圾字节上。
 
 于是 BF 端只需要"逐字符抄记录模板"，零算术、零前瞻、零回填。
 
 ```
 bfc.exe             (C++ 种子)
-  │  编译 bfsrc/bfc2.bf（67497 字节纯 BF）
+  │  编译 bfsrc/bfc2.bf（79455 字节纯 BF）
   ▼
-bfc2_seed.exe       (BF 编译器翻译成的原生程序)                    0.015 s
+bfc2_seed.exe       (BF 编译器翻译成的原生程序)                    0.017 s
   │  bfc2_seed.exe < bfsrc/bfc2.bf
   ▼
-bfc2.exe            (编译器编译自己 → 504775 字节 exe)            0.289 s
+bfc2.exe            (编译器编译自己 → 576523 字节 exe)            0.316 s
   │  bfc2.exe < bfsrc/bfc2.bf
   ▼
-stage3.exe          (新编译器再次编译自己)                        1.490 s
+stage3.exe          (新编译器再次编译自己)                        2.468 s
 ```
 
 **固定点**：`stage3.exe` 与 `bfc2.exe` **逐字节相同**；两者都与
@@ -397,14 +398,14 @@ stage3.exe          (新编译器再次编译自己)                        1.49
 
 ```bat
 python tools\verify_bfc2.py         :: 11 项：解释 bfc2.bf，与模型逐字节一致
-python tools\test_pak.py            :: 26 项：示例程序行为 + PE 结构
+python tools\test_pak.py            :: 34 项：示例行为 + PE 结构 + 坏载荷拒绝
 python tools\test_pak_large.py      :: 6 项：编译 awib.b 并与原生 awib 对拍
 python bootstrap\selfhost_pak.py    :: 29 项：完整自举链 + 固定点
 ```
 
-限制：记录流上限 2 MiB（约 5.8 万条 `.`）、循环嵌套 4096 层、磁带 30000 单元；
-运行期比 `bfc.exe` 产物慢 1.5–3 倍（每条指令多一个 `jmp`）。完整推理见
-[`docs/SELFHOST.md`](docs/SELFHOST.md)。
+限制：记录流上限 2 MiB（约 34.9 万条 6 字节指令、或 5.8 万条 `.`）、循环嵌套
+4096 层、磁带 30000 单元；运行期比 `bfc.exe` 产物慢 1.5–3 倍（每条指令多一个
+`jmp`）。完整推理见 [`docs/SELFHOST.md`](docs/SELFHOST.md)。
 
 ### awib 交叉验证（第三方 BF 自举编译器）
 
@@ -481,11 +482,11 @@ powershell -File awib\verify_awib.ps1             :: 一键复现全部 16 项�
 | `tools/gen_bfc2.py` | 生成 `bfsrc/bfc2.bf`（逐字符抄写记录模板，零算术）|
 | `tools/verify_bfc2.py` | 在 Python 里解释 `bfc2.bf`，与 `pak.py` 模型逐字节比对（11 项）|
 | `tools/bfrun.py` | 带游程压缩的 Python Brainfuck 解释器（用在 verify_bfc2）|
-| `bfsrc/bfc2.bf` | **不用 gcc 的自举编译器**（66 KB 纯 BF），输出完整 PE32+ 字节流 |
+| `bfsrc/bfc2.bf` | **不用 gcc 的自举编译器**（78 KB 纯 BF），输出完整 PE32+ 字节流 |
 | `bfsrc/bfc2_seed.exe` | `bfc.exe` 编译 `bfc2.bf` 得到的种子编译器 |
-| `bfsrc/bfc2.exe` | 自举后的 BF → exe 编译器（504775 B，由 `bfc2_seed.exe` 产出）|
+| `bfsrc/bfc2.exe` | 自举后的 BF → exe 编译器（576523 B，由 `bfc2_seed.exe` 产出）|
 | `bootstrap/selfhost_pak.py` | bfc2 自举链：固定点 + 示例程序 + awib 对拍（29 项检查）|
-| `tools/test_pak.py` | PAK 镜像行为测试：5 个示例 + PE 结构（26 项检查）|
+| `tools/test_pak.py` | PAK 镜像行为测试：5 个示例 + PE 结构 + 坏载荷拒绝（34 项检查）|
 | `tools/test_pak_large.py` | 大程序测试：编译 48 KB 的 awib.b 并与原生 awib 对拍（6 项检查）|
 | `docs/SELFHOST.md` | 自举的设计推理：为什么必须 overlay + 运行期补丁，以及记录格式 |
 | `examples/bfc0_hello.bf` | 由 bfc0 编译的演示程序（输出 Hello）|
